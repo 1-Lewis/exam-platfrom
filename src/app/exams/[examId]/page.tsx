@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
-import ExamClient from "./examclient";
+import ExamClient from "./ExamClient";
 import StartButton from "./StartButton";
 
 type PageProps = { params: { examId: string } };

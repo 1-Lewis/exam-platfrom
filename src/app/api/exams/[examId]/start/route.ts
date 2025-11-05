@@ -5,45 +5,58 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 
 export async function POST(
-  req: Request,
+  _req: Request,
   { params }: { params: { id: string } }
 ) {
   const session = await getServerSession(authOptions);
-  if (!session?.user?.id)
+  if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const examId = params.id;
 
-  const existing = await prisma.attempt.findFirst({
+  // On NE crée PAS d'Attempt ici : il doit déjà exister (provisionné par l’admin)
+  const attempt = await prisma.attempt.findFirst({
     where: { examId, userId: session.user.id },
+    select: {
+      id: true,
+      status: true,
+      durationSec: true,
+      startedAt: true,
+      expectedEndAt: true,
+    },
   });
 
-  // Vérifie explicitement
-  if (!existing) {
+  // Non provisionné pour cet élève
+  if (!attempt) {
+    // 403 si tu considères que l’exam existe mais non affecté ; 404 si tu préfères rester neutre
+    return NextResponse.json({ error: "Exam not assigned to this user" }, { status: 403 });
+  }
+
+  if (attempt.status === "SUBMITTED") {
     return NextResponse.json(
-      { error: "Attempt not found" },
-      { status: 404 }
+      { error: "Already submitted", id: attempt.id, status: attempt.status },
+      { status: 409 }
     );
   }
 
-  // À partir d’ici, TypeScript sait que existing n’est pas nul
-  const now = new Date();
-
-  // Si déjà démarré, retour idempotent
-  if (existing.startedAt && existing.expectedEndAt) {
+  // Idempotent : si déjà démarré, renvoie l’état courant
+  if (attempt.startedAt && attempt.expectedEndAt) {
     return NextResponse.json({
-      id: existing.id,
+      id: attempt.id,
       started: true,
-      startedAt: existing.startedAt,
-      expectedEndAt: existing.expectedEndAt,
+      status: attempt.status,
+      startedAt: attempt.startedAt,
+      expectedEndAt: attempt.expectedEndAt,
     });
   }
 
-  // Calcule l’heure de fin
-  const expectedEnd = new Date(now.getTime() + existing.durationSec * 1000);
+  // Démarre la tentative
+  const now = new Date();
+  const expectedEnd = new Date(now.getTime() + attempt.durationSec * 1000);
 
   const updated = await prisma.attempt.update({
-    where: { id: existing.id },
+    where: { id: attempt.id },
     data: {
       startedAt: now,
       expectedEndAt: expectedEnd,

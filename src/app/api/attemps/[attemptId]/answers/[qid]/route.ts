@@ -9,6 +9,8 @@ import {
   ensureAttemptIsWritableOrAutoSubmit,
   AttemptLockedError,
 } from "@/lib/attempt-timer"
+import { assertAttemptOwnershipOrThrow, ForbiddenError } from "@/lib/ownership";
+
 
 // --- Typage JSON Prisma (incluant le sentinelle JsonNull) ---
 type JsonInput = Prisma.InputJsonValue | Prisma.NullTypes.JsonNull
@@ -43,7 +45,7 @@ export async function POST(
   // Parse & validate le body
   let content: JsonInput
   try {
-    ;({ content } = BodySchema.parse(await req.json()))
+    await assertAttemptOwnershipOrThrow(params.attemptId, session.user.id);({ content } = BodySchema.parse(await req.json()))
   } catch (e) {
     if (e instanceof z.ZodError) {
       return NextResponse.json({ error: "Invalid body", issues: e.issues }, { status: 400 })
@@ -57,6 +59,9 @@ export async function POST(
   } catch (e) {
     if (e instanceof AttemptLockedError) {
       return NextResponse.json({ error: e.message, locked: true }, { status: e.status })
+    }
+    if (e instanceof ForbiddenError) {
+      return NextResponse.json({ error: e.message }, { status: e.status });
     }
     // Attempt introuvable ou autre
     return NextResponse.json({ error: "Attempt not found or not writable" }, { status: 404 })

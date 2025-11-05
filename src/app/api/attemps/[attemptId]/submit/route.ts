@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { submitAttemptServerSide, getAttemptWithTime } from "@/lib/attempt-timer";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { assertAttemptOwnershipOrThrow, ForbiddenError } from "@/lib/ownership";
 
 export async function POST(
   _req: Request,
@@ -10,6 +11,15 @@ export async function POST(
 ) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  try {
+    await assertAttemptOwnershipOrThrow(params.id, session.user.id);
+  } catch (e) {
+    if (e instanceof ForbiddenError) {
+      return NextResponse.json({ error: e.message }, { status: e.status });
+    }
+    throw e;
+  }
 
   // (Optionnel) vérifier ownership attempt
 

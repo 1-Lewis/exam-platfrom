@@ -2,7 +2,7 @@
 "use client";
 
 import { useServerTimer } from "@/hooks/useServerTimer";
-import { TimerBanner } from "@/components/timebanner";
+import { TimerBanner } from "@/components/TimeBanner";
 // import RichAnswerEditor from "@/components/RichAnswerEditor"; // si tu l'utilises ici
 
 export default function ExamClient({ attemptId }: { attemptId: string }) {

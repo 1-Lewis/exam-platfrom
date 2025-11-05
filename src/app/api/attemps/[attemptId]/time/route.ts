@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getAttemptWithTime } from "@/lib/attempt-timer";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { assertAttemptOwnershipOrThrow, ForbiddenError } from "@/lib/ownership";
 
 export async function GET(
   _req: Request,
@@ -10,6 +11,15 @@ export async function GET(
 ) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  try {
+    await assertAttemptOwnershipOrThrow(params.id, session.user.id);
+  } catch (e) {
+    if (e instanceof ForbiddenError) {
+      return NextResponse.json({ error: e.message }, { status: e.status });
+    }
+    throw e;
+  }
 
   const state = await getAttemptWithTime(params.id);
   if (!state) return NextResponse.json({ error: "Not found" }, { status: 404 });
