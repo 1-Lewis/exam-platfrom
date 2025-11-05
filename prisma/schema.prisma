@@ -19,6 +19,12 @@ enum QuestionType {
   FILE_UPLOAD
 }
 
+enum AttemptStatus {
+  PENDING
+  ONGOING
+  SUBMITTED
+}
+
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
@@ -69,17 +75,21 @@ model Question {
 model Attempt {
   id             String    @id @default(cuid())
   examId         String
-  studentId      String
+  userId      String
   startedAt      DateTime  @default(now())
+  expectedEndAt  DateTime?
   submittedAt    DateTime?
   focusLossCount Int       @default(0)
+  status         AttemptStatus @default(PENDING)
+  durationSec    Int           // durée totale de l'examen en secondes
 
   // 👇 relations nommées pour matcher les back-relations
   exam    Exam @relation("ExamAttempts", fields: [examId], references: [id])
-  student User @relation("UserAttempts", fields: [studentId], references: [id])
+  student User @relation("UserAttempts", fields: [userId], references: [id])
 
   answers Answer[]
   events  Event[]
+  @@index([expectedEndAt])
 }
 
 model Answer {

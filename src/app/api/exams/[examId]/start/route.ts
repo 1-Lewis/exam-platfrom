@@ -1,42 +1,56 @@
-// src/app/api/exams/[examId]/start/route.ts
+// src/app/api/exams/[id]/start/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 
 export async function POST(
-  _req: Request,
-  { params }: { params: { examId: string } }
+  req: Request,
+  { params }: { params: { id: string } }
 ) {
   const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
+  if (!session?.user?.id)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
 
-  const exam = await prisma.exam.findUnique({
-    where: { id: params.examId },
-    select: { id: true },
-  });
-  if (!exam) {
-    return NextResponse.json({ error: "Exam not found" }, { status: 404 });
-  }
+  const examId = params.id;
 
   const existing = await prisma.attempt.findFirst({
-    where: { examId: exam.id, studentId: session.user.id },
-    select: { id: true },
+    where: { examId, userId: session.user.id },
   });
-  if (existing) {
-    return NextResponse.json({ attemptId: existing.id }, { status: 200 });
+
+  // Vérifie explicitement
+  if (!existing) {
+    return NextResponse.json(
+      { error: "Attempt not found" },
+      { status: 404 }
+    );
   }
 
-  const attempt = await prisma.attempt.create({
+  // À partir d’ici, TypeScript sait que existing n’est pas nul
+  const now = new Date();
+
+  // Si déjà démarré, retour idempotent
+  if (existing.startedAt && existing.expectedEndAt) {
+    return NextResponse.json({
+      id: existing.id,
+      started: true,
+      startedAt: existing.startedAt,
+      expectedEndAt: existing.expectedEndAt,
+    });
+  }
+
+  // Calcule l’heure de fin
+  const expectedEnd = new Date(now.getTime() + existing.durationSec * 1000);
+
+  const updated = await prisma.attempt.update({
+    where: { id: existing.id },
     data: {
-      examId: exam.id,
-      studentId: session.user.id,
-      startedAt: new Date(),
+      startedAt: now,
+      expectedEndAt: expectedEnd,
+      status: "ONGOING",
     },
-    select: { id: true },
+    select: { id: true, startedAt: true, expectedEndAt: true, status: true },
   });
 
-  return NextResponse.json({ attemptId: attempt.id }, { status: 201 });
+  return NextResponse.json({ ...updated, started: true });
 }
