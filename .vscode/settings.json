@@ -1,0 +1,5 @@
+{
+  "search.exclude": { "**/.next": true },
+  "files.watcherExclude": { "**/.next/**": true },
+  "files.exclude": { "**/.next": true }   // ← cache .next dans l’explorateur
+}

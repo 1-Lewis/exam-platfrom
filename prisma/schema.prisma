@@ -1,0 +1,151 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  TEACHER
+  STUDENT
+}
+
+enum QuestionType {
+  RICH_TEXT
+  MATH_EDITOR
+  FILE_UPLOAD
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  role      Role     @default(STUDENT)
+  createdAt DateTime @default(now())
+
+  // 👇 NEW
+  passwordHash String?
+
+  accounts  Account[]
+  sessions  Session[]
+  exams     Exam[]    @relation("UserExams")
+  attempts  Attempt[] @relation("UserAttempts")
+}
+
+
+model Exam {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  startsAt    DateTime
+  endsAt      DateTime
+  durationMin Int
+  useSEB      Boolean  @default(false)
+
+  createdById String
+  createdBy   User   @relation("UserExams", fields: [createdById], references: [id])
+
+  questions Question[]
+
+  // 👇 back-relation vers Attempt
+  attempts Attempt[] @relation("ExamAttempts")
+}
+
+model Question {
+  id        String       @id @default(cuid())
+  examId    String
+  exam      Exam         @relation(fields: [examId], references: [id])
+  order     Int
+  type      QuestionType
+  statement String
+  points    Int          @default(1)
+
+  answers   Answer[]
+}
+
+model Attempt {
+  id             String    @id @default(cuid())
+  examId         String
+  studentId      String
+  startedAt      DateTime  @default(now())
+  submittedAt    DateTime?
+  focusLossCount Int       @default(0)
+
+  // 👇 relations nommées pour matcher les back-relations
+  exam    Exam @relation("ExamAttempts", fields: [examId], references: [id])
+  student User @relation("UserAttempts", fields: [studentId], references: [id])
+
+  answers Answer[]
+  events  Event[]
+}
+
+model Answer {
+  id         String   @id @default(cuid())
+  attemptId  String
+  questionId String
+  content    Json
+  updatedAt  DateTime @updatedAt
+
+  attempt  Attempt  @relation(fields: [attemptId], references: [id])
+  question Question @relation(fields: [questionId], references: [id])
+
+  @@unique([attemptId, questionId]) // 👈 important
+}
+
+model Event {
+  id        String   @id @default(cuid())
+  attemptId String
+  type      String // FOCUS_LOST, FOCUS_GAINED, SNAPSHOT_TAKEN, PASTE, etc.
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  attempt Attempt @relation(fields: [attemptId], references: [id])
+
+  @@index([attemptId])
+}
+
+/**
+ * -------------------- NextAuth models --------------------
+ */
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
