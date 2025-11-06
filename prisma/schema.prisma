@@ -159,3 +159,4 @@ model VerificationToken {
 
   @@unique([identifier, token])
 }
+
