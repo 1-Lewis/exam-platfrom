@@ -10,18 +10,26 @@ import { getAttemptWithTime } from "@/lib/attempt-timer";
  * → Renvoie le temps restant côté serveur pour une tentative donnée.
  * → Verrouille côté serveur si expirée.
  */
-export async function GET(
-  _req: Request,
-  { params }: { params: { id: string } }
-) {
+
+interface RouteCtx {
+  params: Promise<{ id: string }>; // ✅ Next 16: params est un Promise
+}
+
+export async function GET(_req: Request, ctx: RouteCtx) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // ✅ Unwrap des params
+  const { id } = await ctx.params;
+  if (!id) {
+    return NextResponse.json({ error: "Missing attemptId" }, { status: 400 });
+  }
+
   // Vérifie que l'étudiant est bien propriétaire de la tentative
   try {
-    await assertAttemptOwnershipOrThrow(params.id, session.user.id);
+    await assertAttemptOwnershipOrThrow(id, session.user.id);
   } catch (e) {
     if (e instanceof ForbiddenError) {
       return NextResponse.json({ error: e.message }, { status: e.status });
@@ -30,7 +38,7 @@ export async function GET(
   }
 
   // Récupère état temporel côté serveur
-  const state = await getAttemptWithTime(params.id);
+  const state = await getAttemptWithTime(id);
   if (!state) {
     return NextResponse.json({ error: "Attempt not found" }, { status: 404 });
   }

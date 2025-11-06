@@ -4,66 +4,130 @@ import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 
-export async function POST(
-  _req: Request,
-  { params }: { params: { id: string } }
-) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+interface RouteContext {
+  params: Promise<{ id: string }>; // ⬅️ params est un Promise sous Next 16
+}
 
-  const examId = params.id;
+export async function POST(req: Request, ctx: RouteContext) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-  // On NE crée PAS d'Attempt ici : il doit déjà exister (provisionné par l’admin)
-  const attempt = await prisma.attempt.findFirst({
-    where: { examId, userId: session.user.id },
-    select: {
-      id: true,
-      status: true,
-      durationSec: true,
-      startedAt: true,
-      expectedEndAt: true,
-    },
-  });
+    // ✅ Unwrap des params
+    const { id: idFromParams } = await ctx.params;
 
-  // Non provisionné pour cet élève
-  if (!attempt) {
-    // 403 si tu considères que l’exam existe mais non affecté ; 404 si tu préfères rester neutre
-    return NextResponse.json({ error: "Exam not assigned to this user" }, { status: 403 });
-  }
+    // 🔒 Filet de sécurité : si jamais idFromParams est vide, on tente de parser l’URL
+    let examId = idFromParams;
+    if (!examId) {
+      const url = new URL(req.url);
+      // /api/exams/:id/start -> on récupère le segment entre "exams" et "start"
+      const parts = url.pathname.split("/").filter(Boolean);
+      const i = parts.findIndex((p) => p === "exams");
+      if (i !== -1 && parts[i + 1] && parts[i + 2] === "start") {
+        examId = parts[i + 1];
+      }
+    }
+    if (!examId) {
+      return NextResponse.json({ error: "Missing exam id" }, { status: 400 });
+    }
 
-  if (attempt.status === "SUBMITTED") {
+    // 1) Vérifie l'existence de l'examen
+    const exam = await prisma.exam.findUnique({
+      where: { id: examId },
+      select: { id: true, durationMin: true },
+    });
+    if (!exam) {
+      return NextResponse.json({ error: "Exam not found" }, { status: 404 });
+    }
+
+    const fallbackDurationSec =
+      typeof exam.durationMin === "number" ? exam.durationMin * 60 : 60 * 60;
+
+    // 2) Idempotent : réutilise une tentative existante si non soumise
+    let attempt = await prisma.attempt.findFirst({
+      where: { examId, userId: session.user.id },
+      select: {
+        id: true,
+        status: true,
+        durationSec: true,
+        startedAt: true,
+        expectedEndAt: true,
+        submittedAt: true,
+      },
+    });
+
+    // Crée si absente
+    if (!attempt) {
+      attempt = await prisma.attempt.create({
+        data: {
+          examId,
+          userId: session.user.id,
+          durationSec: fallbackDurationSec,
+          status: "ONGOING", // adapte à ton enum
+        },
+        select: {
+          id: true,
+          status: true,
+          durationSec: true,
+          startedAt: true,
+          expectedEndAt: true,
+          submittedAt: true,
+        },
+      });
+    }
+
+    // Déjà soumise
+    if (attempt.submittedAt || attempt.status === "SUBMITTED") {
+      return NextResponse.json(
+        { error: "Already submitted", attemptId: attempt.id },
+        { status: 409 }
+      );
+    }
+
+    // Déjà démarrée
+    if (attempt.startedAt && attempt.expectedEndAt) {
+      return NextResponse.json(
+        {
+          attemptId: attempt.id,
+          startedAt: attempt.startedAt,
+          expectedEndAt: attempt.expectedEndAt,
+        },
+        { status: 200 }
+      );
+    }
+
+    // Démarrage
+    const now = new Date();
+    const durationSec =
+      typeof attempt.durationSec === "number" ? attempt.durationSec : fallbackDurationSec;
+    const expectedEndAt = new Date(now.getTime() + durationSec * 1000);
+
+    const updated = await prisma.attempt.update({
+      where: { id: attempt.id },
+      data: {
+        startedAt: now,
+        expectedEndAt,
+        status: "ONGOING",
+        durationSec,
+      },
+      select: { id: true, startedAt: true, expectedEndAt: true },
+    });
+
     return NextResponse.json(
-      { error: "Already submitted", id: attempt.id, status: attempt.status },
-      { status: 409 }
+      {
+        attemptId: updated.id,
+        startedAt: updated.startedAt,
+        expectedEndAt: updated.expectedEndAt,
+      },
+      { status: 201 }
+    );
+  } catch (err) {
+    console.error("[/api/exams/[id]/start] error", err);
+    return NextResponse.json(
+      { error: "Internal error", details: String(err) },
+      { status: 500 }
     );
   }
-
-  // Idempotent : si déjà démarré, renvoie l’état courant
-  if (attempt.startedAt && attempt.expectedEndAt) {
-    return NextResponse.json({
-      id: attempt.id,
-      started: true,
-      status: attempt.status,
-      startedAt: attempt.startedAt,
-      expectedEndAt: attempt.expectedEndAt,
-    });
-  }
-
-  // Démarre la tentative
-  const now = new Date();
-  const expectedEnd = new Date(now.getTime() + attempt.durationSec * 1000);
-
-  const updated = await prisma.attempt.update({
-    where: { id: attempt.id },
-    data: {
-      startedAt: now,
-      expectedEndAt: expectedEnd,
-      status: "ONGOING",
-    },
-    select: { id: true, startedAt: true, expectedEndAt: true, status: true },
-  });
-
-  return NextResponse.json({ ...updated, started: true });
 }

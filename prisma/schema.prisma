@@ -35,12 +35,11 @@ model User {
   // 👇 NEW
   passwordHash String?
 
-  accounts  Account[]
-  sessions  Session[]
-  exams     Exam[]    @relation("UserExams")
-  attempts  Attempt[] @relation("UserAttempts")
+  accounts Account[]
+  sessions Session[]
+  exams    Exam[]    @relation("UserExams")
+  attempts Attempt[] @relation("UserAttempts")
 }
-
 
 model Exam {
   id          String   @id @default(cuid())
@@ -69,26 +68,28 @@ model Question {
   statement String
   points    Int          @default(1)
 
-  answers   Answer[]
+  answers Answer[]
 }
 
 model Attempt {
-  id             String    @id @default(cuid())
+  id             String        @id @default(cuid())
   examId         String
-  userId      String
-  startedAt      DateTime  @default(now())
+  userId         String
+  startedAt      DateTime      @default(now())
   expectedEndAt  DateTime?
   submittedAt    DateTime?
-  focusLossCount Int       @default(0)
+  focusLossCount Int           @default(0)
   status         AttemptStatus @default(PENDING)
-  durationSec    Int           // durée totale de l'examen en secondes
+  durationSec    Int // durée totale de l'examen en secondes
 
   // 👇 relations nommées pour matcher les back-relations
   exam    Exam @relation("ExamAttempts", fields: [examId], references: [id])
   student User @relation("UserAttempts", fields: [userId], references: [id])
 
-  answers Answer[]
-  events  Event[]
+  answers       Answer[]
+  events        Event[]
+  proctorEvents ProctorEvent[]
+
   @@index([expectedEndAt])
 }
 
@@ -160,3 +161,14 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
+model ProctorEvent {
+  id        String   @id @default(cuid())
+  attempt   Attempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  attemptId String
+  type      String
+  meta      Json
+  createdAt DateTime @default(now())
+
+  @@index([attemptId, createdAt])
+  @@index([type, createdAt])
+}

@@ -5,25 +5,26 @@ import { authOptions } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
 import ExamClient from "./ExamClient";
 import StartButton from "./StartButton";
+import { AttemptClientProctoring } from "./AttemptClientProctoring";
 
-type PageProps = { params: { examId: string } };
+// ✅ Correction : params est un Promise sous Turbopack
+type PageProps = { params: Promise<Record<string, string | string[] | undefined>> };
 
 export default async function ExamPage({ params }: PageProps) {
+  const resolvedParams = await params; // ← on attend avant d'y accéder
   const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    redirect("/api/auth/signin");
-  }
+  if (!session?.user?.id) redirect("/api/auth/signin");
 
-  const examId = params.examId;
+  const raw = resolvedParams.examId;
+  const examId = Array.isArray(raw) ? raw[0] : raw;
+  if (!examId) notFound();
 
-  // Vérifier que l'examen existe (on ne sélectionne que l'id)
   const exam = await prisma.exam.findUnique({
     where: { id: examId },
     select: { id: true },
   });
   if (!exam) notFound();
 
-  // Récupérer une tentative existante pour cet exam et cet utilisateur
   const attempt = await prisma.attempt.findFirst({
     where: { examId, userId: session.user.id },
     select: { id: true },
@@ -32,11 +33,12 @@ export default async function ExamPage({ params }: PageProps) {
   return (
     <div className="space-y-6">
       {!attempt ? (
-        // Aucune tentative encore : on affiche le bouton de démarrage
         <StartButton examId={examId} />
       ) : (
-        // Tentative existante : on affiche le client avec le timer/éditeur
-        <ExamClient attemptId={attempt.id} />
+        <>
+          <AttemptClientProctoring attemptId={attempt.id} />
+          <ExamClient attemptId={attempt.id} />
+        </>
       )}
     </div>
   );
