@@ -7,17 +7,21 @@ import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import type { MathFieldElement } from "@/types/mathlive";
 import { MathInline, MathBlock } from "@/editor/extensions/math";
-import { mathExtensions } from "@/editor/extensions/math";
+import SaveStatus from "@/components/SaveStatus";
+import { useAutosaveAnswer } from "@/hooks/useAutosaveAnswer";
 
 type RichAnswerEditorProps = {
   attemptId: string;
   initial?: JSONContent;
-  onChange?: (doc: JSONContent) => void;
+  onChange?: (doc: JSONContent) => void; // toujours supporté si tu en as besoin ailleurs
   readOnly?: boolean;
 };
 
 export default function RichAnswerEditor(props: RichAnswerEditorProps) {
-  const { attemptId: _attemptId, initial, onChange, readOnly = false } = props;
+  const { attemptId, initial, onChange, readOnly = false } = props;
+
+  // 🔁 autosave robuste
+  const autosave = useAutosaveAnswer({ attemptId, debounceMs: 1000 });
 
   const editor = useEditor({
     extensions: [
@@ -33,31 +37,44 @@ export default function RichAnswerEditor(props: RichAnswerEditorProps) {
     editable: !readOnly,
     onUpdate({ editor }) {
       if (readOnly) return;
-      onChange?.(editor.getJSON());
+      const json = editor.getJSON();
+      autosave.onChange(json);
+      onChange?.(json);
     },
     immediatelyRender: false,
   });
 
-  // Helpers d’insertion (utilisés par boutons & évènements)
-  const insertInline = (latex: string) => {
+  // === (le reste de ta logique MathLive inchangée) ===
+
+  // Basculer readOnly à chaud
+  useEffect(() => {
+    if (!editor) return;
+    editor.setEditable(!readOnly);
+  }, [editor, readOnly]);
+
+  // --- Popup MathLive (facultative) ---
+  const [openMath, setOpenMath] = useState(false);
+  const [mfVal, setMfVal] = useState("\\frac{}{}");
+  const mathRef = useRef<MathFieldElement | null>(null);
+
+  function insertInline(latex: string) {
     if (!editor) return;
     editor
       .chain()
       .focus()
       .insertContent({ type: "mathInline", attrs: { content: latex } })
       .run();
-  };
+  }
 
-  const insertBlock = (latex: string) => {
+  function insertBlock(latex: string) {
     if (!editor) return;
     editor
       .chain()
       .focus()
       .insertContent({ type: "mathBlock", attrs: { content: latex } })
       .run();
-  };
+  }
 
-  // ✅ Init MathLive (pour la popup facultative “ƒx” uniquement)
   useEffect(() => {
     let mounted = true;
     (globalThis as unknown as { mathlive?: unknown }).mathlive = {
@@ -83,112 +100,77 @@ export default function RichAnswerEditor(props: RichAnswerEditorProps) {
     };
   }, []);
 
-  // Basculer readOnly à chaud
-  useEffect(() => {
-    if (!editor) return;
-    editor.setEditable(!readOnly);
-  }, [editor, readOnly]);
-
-  // === Écoute globale "math:insert-latex" → insère en nœud KaTeX
-  useEffect(() => {
-    if (!editor) return;
-    const onInsert = (e: Event) => {
-      const detail = (e as CustomEvent<{ latex: string; display?: "inline" | "block" }>).detail;
-      if (!detail?.latex) return;
-      const latex = detail.latex.trim();
-      if (detail.display === "block") insertBlock(latex);
-      else insertInline(latex);
-    };
-    window.addEventListener("math:insert-latex", onInsert);
-    return () => window.removeEventListener("math:insert-latex", onInsert);
-  }, [editor]);
-
-  // --- Popup MathLive (facultative) ---
-  const [openMath, setOpenMath] = useState(false);
-  const [mfVal, setMfVal] = useState("\\frac{}{}");
-  const mathRef = useRef<MathFieldElement | null>(null);
-
-  function openMathWithTemplate(template: string) {
-    setOpenMath(true);
-    setTimeout(() => {
-      setMfVal(template);
-      try {
-        if (mathRef.current) {
-          mathRef.current.value = template;
-          mathRef.current.executeCommand?.(["selectAll"]);
-          mathRef.current.focus();
-        }
-      } catch {
-        // noop
-      }
-    }, 0);
-  }
-
   if (!editor) return null;
 
   return (
     <div className="space-y-3">
-      {/* Barre d’outils — maths insérées DIRECTEMENT */}
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          className="px-2 py-1 border rounded-lg"
-          onClick={() => editor.chain().focus().toggleBold().run()}
-          aria-pressed={editor.isActive("bold")}
-          disabled={readOnly}
-          title="Gras"
-        >
-          B
-        </button>
-        <button
-          type="button"
-          className="px-2 py-1 border rounded-lg"
-          onClick={() => editor.chain().focus().toggleItalic().run()}
-          aria-pressed={editor.isActive("italic")}
-          disabled={readOnly}
-          title="Italique"
-        >
-          I
-        </button>
-        <button
-          type="button"
-          className="px-2 py-1 border rounded-lg"
-          onClick={() => editor.chain().focus().toggleBulletList().run()}
-          disabled={readOnly}
-          title="Liste à puces"
-        >
-          • Liste
-        </button>
+      {/* Top bar: outils & statut */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* Barre d’outils (conservée) */}
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="px-2 py-1 border rounded-lg"
+            onClick={() => editor.chain().focus().toggleBold().run()}
+            aria-pressed={editor.isActive("bold")}
+            disabled={readOnly}
+            title="Gras"
+          >
+            B
+          </button>
+          <button
+            type="button"
+            className="px-2 py-1 border rounded-lg"
+            onClick={() => editor.chain().focus().toggleItalic().run()}
+            aria-pressed={editor.isActive("italic")}
+            disabled={readOnly}
+            title="Italique"
+          >
+            I
+          </button>
+          <button
+            type="button"
+            className="px-2 py-1 border rounded-lg"
+            onClick={() => editor.chain().focus().toggleBulletList().run()}
+            disabled={readOnly}
+            title="Liste à puces"
+          >
+            • Liste
+          </button>
 
-        <div className="mx-2 h-6 w-px bg-gray-200" />
+          <div className="mx-2 h-6 w-px bg-gray-200" />
 
-        {/* Maths inline */}
-        <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Fraction"
-          onClick={() => insertInline("\\frac{}{}")}>a⁄b</button>
-        <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Puissance"
-          onClick={() => insertInline("x^{ }")}>x²</button>
-        <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Racine carrée"
-          onClick={() => insertInline("\\sqrt{}")}>√</button>
-        <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Indice"
-          onClick={() => insertInline("x_{ }")}>aᵢ</button>
+          {/* Maths inline */}
+          <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Fraction"
+            onClick={() => insertInline("\\frac{}{}")}>a⁄b</button>
+          <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Puissance"
+            onClick={() => insertInline("x^{ }")}>x²</button>
+          <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Racine carrée"
+            onClick={() => insertInline("\\sqrt{}")}>√</button>
+          <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Indice"
+            onClick={() => insertInline("x_{ }")}>aᵢ</button>
 
-        {/* Maths bloc */}
-        <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Intégrale (bloc)"
-          onClick={() => insertBlock("\\int")}>∫</button>
-        <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Somme (bloc)"
-          onClick={() => insertBlock("\\sum")}>Σ</button>
+          {/* Maths bloc */}
+          <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Intégrale (bloc)"
+            onClick={() => insertBlock("\\int")}>∫</button>
+          <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Somme (bloc)"
+            onClick={() => insertBlock("\\sum")}>Σ</button>
 
-        {/* Saisie guidée (facultative) */}
-        <div className="mx-2 h-6 w-px bg-gray-200" />
-        <button
-          type="button"
-          className="px-2 py-1 border rounded-lg"
-          onClick={() => openMathWithTemplate("\\frac{}{}")}
-          disabled={readOnly}
-          title="Éditer une formule…"
-        >
-          ƒx
-        </button>
+          {/* Saisie guidée */}
+          <div className="mx-2 h-6 w-px bg-gray-200" />
+          <button
+            type="button"
+            className="px-2 py-1 border rounded-lg"
+            onClick={() => { setOpenMath(true); setMfVal("\\frac{}{}"); }}
+            disabled={readOnly}
+            title="Éditer une formule…"
+          >
+            ƒx
+          </button>
+        </div>
+
+        {/* Statut autosave */}
+        <SaveStatus state={autosave.state} onRetry={autosave.retry} />
       </div>
 
       {/* Zone d'édition */}
@@ -196,10 +178,10 @@ export default function RichAnswerEditor(props: RichAnswerEditorProps) {
         <EditorContent editor={editor} />
       </div>
 
-      {/* Popup MathLive (optionnelle) */}
+      {/* Popup MathLive (inchangée, juste boutons d’insertion) */}
       {openMath && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white p-4 rounded-2xl w-[min(560px,92vw)] space-y-3 shadow-lg">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+          <div className="w-[min(560px,92vw)] space-y-3 rounded-2xl bg-white p-4 shadow-lg">
             <div className="font-semibold">Insérer une formule</div>
 
             <math-field
@@ -223,20 +205,20 @@ export default function RichAnswerEditor(props: RichAnswerEditorProps) {
 
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-xs text-gray-500">
-                Astuce : utilisez les boutons ci-dessus puis “Insérer”.
+                Astuce : utilisez les boutons puis “Insérer”.
               </div>
               <div className="flex items-center gap-2">
-                <button className="px-3 py-1.5 border rounded-lg" onClick={() => setOpenMath(false)}>
+                <button className="rounded-lg border px-3 py-1.5" onClick={() => setOpenMath(false)}>
                   Annuler
                 </button>
                 <button
-                  className="px-3 py-1.5 border rounded-lg bg-gray-900 text-white hover:opacity-90"
+                  className="rounded-lg border bg-gray-900 px-3 py-1.5 text-white hover:opacity-90"
                   onClick={() => { insertInline(mfVal); setOpenMath(false); }}
                 >
                   Insérer (inline)
                 </button>
                 <button
-                  className="px-3 py-1.5 border rounded-lg bg-gray-900 text-white hover:opacity-90"
+                  className="rounded-lg border bg-gray-900 px-3 py-1.5 text-white hover:opacity-90"
                   onClick={() => { insertBlock(mfVal); setOpenMath(false); }}
                 >
                   Insérer (bloc)
@@ -245,7 +227,7 @@ export default function RichAnswerEditor(props: RichAnswerEditorProps) {
             </div>
 
             <p className="text-xs text-gray-500">
-              Vous pouvez aussi saisir directement <code>$…$</code> (inline) ou <code>$$…$$</code> (bloc).
+              Aussi : <code>$…$</code> (inline) ou <code>$$…$$</code> (bloc).
             </p>
           </div>
         </div>

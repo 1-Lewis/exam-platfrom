@@ -1,15 +1,23 @@
+// src/app/admin/attempts/[attemptId]/viewer-editor.tsx
 "use client";
 
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-// Si tu utilises tes extensions math personnalisées, importe-les ici :
-// import { mathExtensions } from "@/editor/extensions/math";
+import { MathInline, MathBlock } from "@/editor/extensions/math";
 
-export default function ViewerEditor({ initial }: { initial: JSONContent }) {
+type Props = {
+  initial: JSONContent;
+};
+
+export default function ViewerEditor({ initial }: Props) {
   const editor = useEditor({
     extensions: [
+      // StarterKit sans codeBlock si tu n’enregistres pas ce node dans tes copies;
+      // garde-le à true si tu peux avoir des blocks de code.
       StarterKit.configure({ codeBlock: false }),
-      // ...mathExtensions, // active si tu enregistres des nœuds math
+      // 👉 Active nos nœuds KaTeX
+      MathInline,
+      MathBlock,
     ],
     content: initial,
     editable: false,

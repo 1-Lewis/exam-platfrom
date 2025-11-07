@@ -5,48 +5,152 @@ import Link from "next/link";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
 export default async function Dashboard() {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     redirect("/api/auth/signin");
   }
   const userId = session.user.id;
+  const now = new Date();
 
-  // ⚠️ On n'utilise pas createdAt (absent sur Exam chez toi).
-  // Tri simple par id desc comme fallback stable.
+  // Récupère tous les exams + la dernière tentative de cet utilisateur
   const exams = await prisma.exam.findMany({
-    orderBy: { id: "desc" },
+    orderBy: { startsAt: "asc" },
     select: {
       id: true,
-      // si tu ajoutes plus tard un champ (title/name), on pourra l'afficher ici
+      title: true,
+      description: true,
+      startsAt: true,
+      endsAt: true,
+      durationMin: true,
+      attempts: {
+        where: { userId },
+        orderBy: { startedAt: "desc" },
+        take: 1,
+        select: {
+          id: true,
+          status: true,
+          startedAt: true,
+          expectedEndAt: true,
+          submittedAt: true,
+        },
+      },
     },
   });
 
-  // On prend les tentatives de l'utilisateur, triées par id desc (fallback sans createdAt)
-  const attempts = await prisma.attempt.findMany({
-    where: { userId },
-    orderBy: { id: "desc" },
-    select: {
-      id: true,
-      examId: true,
-      submittedAt: true, // on déduit le statut à partir de ça
-    },
+  type ExamRow = (typeof exams)[number] & {
+    state: "UPCOMING" | "ONGOING" | "ENDED";
+  };
+
+  const rows: ExamRow[] = exams.map((e) => {
+    const state =
+      now >= e.startsAt && now <= e.endsAt
+        ? "ONGOING"
+        : now < e.startsAt
+        ? "UPCOMING"
+        : "ENDED";
+    return { ...e, state };
   });
 
-  // Types stricts
-  type AttemptLite = (typeof attempts)[number];
-  type ExamLite = (typeof exams)[number];
+  const ongoing = rows.filter((r) => r.state === "ONGOING");
+  const upcoming = rows.filter((r) => r.state === "UPCOMING");
+  const ended = rows.filter((r) => r.state === "ENDED");
 
-  // Dernière tentative par examen
-  const latestAttemptByExam = new Map<string, AttemptLite>();
-  for (const a of attempts) {
-    if (!latestAttemptByExam.has(a.examId)) {
-      latestAttemptByExam.set(a.examId, a);
-    }
+  function StatusBadge({ label }: { label: string }) {
+    const cls =
+      label === "En cours"
+        ? "bg-amber-50 text-amber-700 border-amber-200"
+        : label === "Soumis"
+        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+        : "bg-gray-50 text-gray-600 border-gray-200";
+    return (
+      <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs ${cls}`}>
+        {label}
+      </span>
+    );
   }
 
-  // Une tentative "en cours" = submittedAt null
-  const inProgress = attempts.find((a) => a.submittedAt === null);
+  function Card({ r }: { r: ExamRow }) {
+    const attempt = r.attempts[0] ?? null;
+
+    const statusLabel = attempt
+      ? attempt.submittedAt
+        ? "Soumis"
+        : "En cours"
+      : r.state === "UPCOMING"
+      ? "Non commencé"
+      : "—";
+
+    const action =
+      r.state === "ONGOING"
+        ? { href: `/exams/${r.id}`, label: attempt ? "Continuer" : "Commencer" }
+        : r.state === "UPCOMING"
+        ? null
+        : attempt?.submittedAt
+        ? { href: `/exams/${r.id}`, label: "Voir la copie" }
+        : null;
+
+    const title = r.title || `Examen ${r.id.slice(0, 6)}`;
+
+    return (
+      <div className="rounded-2xl border bg-white p-4 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h3 className="truncate text-base font-semibold">{title}</h3>
+              <span
+                className={`rounded px-2 py-0.5 text-xs ${
+                  r.state === "ONGOING"
+                    ? "bg-green-100 text-green-800"
+                    : r.state === "UPCOMING"
+                    ? "bg-yellow-100 text-yellow-800"
+                    : "bg-gray-100 text-gray-800"
+                }`}
+              >
+                {r.state}
+              </span>
+            </div>
+            {r.description && (
+              <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                {r.description}
+              </p>
+            )}
+            <div className="mt-2 text-xs text-muted-foreground">
+              Fenêtre : {r.startsAt.toLocaleString()} → {r.endsAt.toLocaleString()} • Durée :{" "}
+              {r.durationMin} min
+            </div>
+            <div className="mt-1 text-xs">
+              Statut de votre copie : <span className="font-mono">{statusLabel}</span>
+            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-3">
+            <StatusBadge label={statusLabel} />
+            {action ? (
+              <Link
+                href={action.href}
+                className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50"
+              >
+                {action.label}
+              </Link>
+            ) : r.state === "UPCOMING" ? (
+              <span className="text-sm text-muted-foreground">
+                Débute le {r.startsAt.toLocaleString()}
+              </span>
+            ) : (
+              <span className="text-sm text-muted-foreground">Terminé</span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Une tentative "en cours" globale (utile pour le bloc rapide)
+  const inProgress = rows.find((r) => r.attempts[0] && !r.attempts[0].submittedAt);
 
   return (
     <main className="mx-auto max-w-5xl p-6 space-y-8">
@@ -66,7 +170,7 @@ export default async function Dashboard() {
           <h2 className="text-sm font-medium text-gray-700">Examen en cours</h2>
         </div>
         {inProgress ? (
-          <div className="p-5 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 p-5">
             <div className="space-y-0.5">
               <div className="text-base font-medium">
                 Vous avez une tentative en cours
@@ -76,89 +180,70 @@ export default async function Dashboard() {
               </div>
             </div>
             <Link
-              href={`/exams/${inProgress.examId}`}
-              className="rounded-lg border px-4 py-2 bg-gray-900 text-white hover:opacity-90"
+              href={`/exams/${inProgress.id}`}
+              className="rounded-lg border bg-gray-900 px-4 py-2 text-white hover:opacity-90"
             >
               Continuer
             </Link>
           </div>
         ) : (
-          <div className="p-5 text-sm text-gray-500">
-            Aucune tentative en cours.
+          <div className="p-5 text-sm text-gray-500">Aucune tentative en cours.</div>
+        )}
+      </section>
+
+      {/* En cours */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-medium text-foreground/80">En cours</h2>
+        {ongoing.length ? (
+          <div className="space-y-3">
+            {ongoing.map((r) => (
+              <Card key={r.id} r={r} />
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-xl border bg-white p-4 text-sm text-muted-foreground">
+            Aucun examen en cours.
           </div>
         )}
       </section>
 
-      {/* Liste des examens */}
-      <section className="rounded-2xl border bg-white shadow-sm">
-        <div className="border-b px-5 py-3">
-          <h2 className="text-sm font-medium text-gray-700">Mes examens</h2>
-        </div>
-
-        {exams.length === 0 ? (
-          <div className="p-5 text-sm text-gray-500">
-            Aucun examen disponible pour le moment.
+      {/* À venir */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-medium text-foreground/80">À venir</h2>
+        {upcoming.length ? (
+          <div className="space-y-3">
+            {upcoming.map((r) => (
+              <Card key={r.id} r={r} />
+            ))}
           </div>
         ) : (
-          <ul className="divide-y">
-            {exams.map((exam: ExamLite) => {
-              const att = latestAttemptByExam.get(exam.id);
-              const statusLabel = att
-                ? att.submittedAt
-                  ? "Soumis"
-                  : "En cours"
-                : "Non commencé";
+          <div className="rounded-xl border bg-white p-4 text-sm text-muted-foreground">
+            Aucun examen à venir.
+          </div>
+        )}
+      </section>
 
-              const action = !att
-                ? { href: `/exams/${exam.id}`, label: "Commencer" }
-                : att.submittedAt
-                ? { href: `/exams/${exam.id}`, label: "Voir la copie" }
-                : { href: `/exams/${exam.id}`, label: "Continuer" };
-
-              return (
-                <li
-                  key={exam.id}
-                  className="px-5 py-4 flex items-center justify-between gap-4"
-                >
-                  <div className="min-w-0">
-                    <div className="truncate font-medium">
-                      Examen {exam.id.slice(0, 6)}
-                    </div>
-                    <div className="mt-0.5 text-xs text-gray-500">
-                      Statut : {statusLabel}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs ${
-                        statusLabel === "En cours"
-                          ? "bg-amber-50 text-amber-700 border-amber-200"
-                          : statusLabel === "Soumis"
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                          : "bg-gray-50 text-gray-600 border-gray-200"
-                      }`}
-                    >
-                      {statusLabel}
-                    </span>
-                    <Link
-                      href={action.href}
-                      className="rounded-lg border px-3 py-1.5 hover:bg-gray-50"
-                    >
-                      {action.label}
-                    </Link>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+      {/* Terminés */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-medium text-foreground/80">Terminés</h2>
+        {ended.length ? (
+          <div className="space-y-3">
+            {ended.map((r) => (
+              <Card key={r.id} r={r} />
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-xl border bg-white p-4 text-sm text-muted-foreground">
+            Aucun examen terminé.
+          </div>
         )}
       </section>
 
       {/* Accès rapides (facultatifs) */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Link
           href="/ztest"
-          className="rounded-2xl border bg-white p-5 shadow-sm hover:bg-gray-50 transition"
+          className="rounded-2xl border bg-white p-5 shadow-sm transition hover:bg-gray-50"
         >
           <div className="text-sm font-medium text-gray-700">Zone de test</div>
           <div className="mt-1 text-xs text-gray-500">
@@ -167,12 +252,10 @@ export default async function Dashboard() {
         </Link>
         <Link
           href="/debug"
-          className="rounded-2xl border bg-white p-5 shadow-sm hover:bg-gray-50 transition"
+          className="rounded-2xl border bg-white p-5 shadow-sm transition hover:bg-gray-50"
         >
           <div className="text-sm font-medium text-gray-700">Debug</div>
-          <div className="mt-1 text-xs text-gray-500">
-            Infos techniques utiles pendant le dev.
-          </div>
+          <div className="mt-1 text-xs text-gray-500">Infos techniques utiles pendant le dev.</div>
         </Link>
       </section>
     </main>
