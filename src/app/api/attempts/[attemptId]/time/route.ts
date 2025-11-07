@@ -5,57 +5,50 @@ import { authOptions } from "@/lib/auth";
 import { assertAttemptOwnershipOrThrow, ForbiddenError } from "@/lib/ownership";
 import { getAttemptWithTime } from "@/lib/attempt-timer";
 
-/**
- * GET /api/attempts/[id]/time
- * → Renvoie le temps restant côté serveur pour une tentative donnée.
- * → Verrouille côté serveur si expirée.
- */
-
 interface RouteCtx {
-  params: Promise<{ id: string }>; // ✅ Next 16: params est un Promise
+  params: Promise<{ id: string }>;
 }
 
 export async function GET(_req: Request, ctx: RouteCtx) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: { "Cache-Control": "no-store" } });
   }
 
-  // ✅ Unwrap des params
   const { id } = await ctx.params;
   if (!id) {
-    return NextResponse.json({ error: "Missing attemptId" }, { status: 400 });
+    return NextResponse.json({ error: "Missing attemptId" }, { status: 400, headers: { "Cache-Control": "no-store" } });
   }
 
-  // Vérifie que l'étudiant est bien propriétaire de la tentative
   try {
     await assertAttemptOwnershipOrThrow(id, session.user.id);
   } catch (e) {
     if (e instanceof ForbiddenError) {
-      return NextResponse.json({ error: e.message }, { status: e.status });
+      return NextResponse.json({ error: e.message }, { status: e.status, headers: { "Cache-Control": "no-store" } });
     }
     throw e;
   }
 
-  // Récupère état temporel côté serveur
   const state = await getAttemptWithTime(id);
   if (!state) {
-    return NextResponse.json({ error: "Attempt not found" }, { status: 404 });
+    return NextResponse.json({ error: "Attempt not found" }, { status: 404, headers: { "Cache-Control": "no-store" } });
   }
 
-  // Calcul du statut verrouillé / restant
   const locked = state.isExpired || state.isSubmitted;
-  const remainingMs = locked ? 0 : Math.max(0, state.remainingMs);
+  const remainingMs = locked ? 0 : Math.max(0, Math.floor(state.remainingMs));
 
-  return NextResponse.json({
-    attemptId: state.attempt.id,
-    status: state.attempt.status,
-    startedAt: state.attempt.startedAt,
-    expectedEndAt: state.attempt.expectedEndAt,
-    submittedAt: state.attempt.submittedAt,
-    now: state.now.toISOString(),
-    remainingMs,
-    isExpired: state.isExpired,
-    locked,
-  });
+  return NextResponse.json(
+    {
+      attemptId: state.attempt.id,
+      status: state.attempt.status,
+      startedAt: state.attempt.startedAt ? state.attempt.startedAt.toISOString() : null,
+      expectedEndAt: state.attempt.expectedEndAt ? state.attempt.expectedEndAt.toISOString() : null,
+      submittedAt: state.attempt.submittedAt ? state.attempt.submittedAt.toISOString() : null,
+      now: state.now.toISOString(),
+      remainingMs,
+      isExpired: state.isExpired,
+      locked,
+    },
+    { headers: { "Cache-Control": "no-store" } }
+  );
 }

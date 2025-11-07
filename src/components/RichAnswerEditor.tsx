@@ -5,8 +5,9 @@ import React, { useEffect, useRef, useState } from "react";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
-// ❌ on n'importe plus "mathlive" ici (sinon il démarre avant la config)
-import type { MathFieldElement } from "@/types/mathlive"; // d.ts local
+import type { MathFieldElement } from "@/types/mathlive";
+import { MathInline, MathBlock } from "@/editor/extensions/math";
+import { mathExtensions } from "@/editor/extensions/math";
 
 type RichAnswerEditorProps = {
   attemptId: string;
@@ -22,9 +23,10 @@ export default function RichAnswerEditor(props: RichAnswerEditorProps) {
     extensions: [
       StarterKit.configure({ codeBlock: false }),
       Placeholder.configure({
-        placeholder:
-          "Écrivez votre réponse… (utilisez les boutons Math pour les formules)",
+        placeholder: "Écrivez votre réponse… (tapez $...$ / $$...$$ ou utilisez la palette)",
       }),
+      MathInline,
+      MathBlock,
     ],
     content: initial ?? { type: "doc", content: [{ type: "paragraph" }] },
     autofocus: "end",
@@ -33,38 +35,49 @@ export default function RichAnswerEditor(props: RichAnswerEditorProps) {
       if (readOnly) return;
       onChange?.(editor.getJSON());
     },
-    immediatelyRender: false, // évite le rendu SSR initial de TipTap
+    immediatelyRender: false,
   });
 
-  // ✅ Init MathLive : définir le chemin AVANT l'import, puis setOptions si dispo
+  // Helpers d’insertion (utilisés par boutons & évènements)
+  const insertInline = (latex: string) => {
+    if (!editor) return;
+    editor
+      .chain()
+      .focus()
+      .insertContent({ type: "mathInline", attrs: { content: latex } })
+      .run();
+  };
+
+  const insertBlock = (latex: string) => {
+    if (!editor) return;
+    editor
+      .chain()
+      .focus()
+      .insertContent({ type: "mathBlock", attrs: { content: latex } })
+      .run();
+  };
+
+  // ✅ Init MathLive (pour la popup facultative “ƒx” uniquement)
   useEffect(() => {
     let mounted = true;
-
-    // 1) Seed global avant import (certaines versions lisent ces valeurs à l'init)
     (globalThis as unknown as { mathlive?: unknown }).mathlive = {
       fontsDirectory: "/mathlive/fonts",
       options: { fontsDirectory: "/mathlive/fonts" },
     };
-
-    // 2) Import dynamique, puis configuration complémentaire
     import("mathlive").then((mod) => {
       if (!mounted) return;
-
       const maybe = mod as unknown as {
         setOptions?: (o: Record<string, unknown>) => void;
         MathfieldElement?: { setOptions?: (o: Record<string, unknown>) => void };
       };
-
       const setOptionsFn =
         typeof maybe.setOptions === "function"
           ? maybe.setOptions
           : typeof maybe.MathfieldElement?.setOptions === "function"
           ? maybe.MathfieldElement.setOptions
           : undefined;
-
       setOptionsFn?.({ fontsDirectory: "/mathlive/fonts" });
     });
-
     return () => {
       mounted = false;
     };
@@ -76,27 +89,23 @@ export default function RichAnswerEditor(props: RichAnswerEditorProps) {
     editor.setEditable(!readOnly);
   }, [editor, readOnly]);
 
-  // === Écoute globale "math:insert-latex" ===
+  // === Écoute globale "math:insert-latex" → insère en nœud KaTeX
   useEffect(() => {
     if (!editor) return;
     const onInsert = (e: Event) => {
       const detail = (e as CustomEvent<{ latex: string; display?: "inline" | "block" }>).detail;
       if (!detail?.latex) return;
       const latex = detail.latex.trim();
-      const isBlock = detail.display === "block";
-      editor
-        .chain()
-        .focus()
-        .insertContent(isBlock ? `<p>$$${latex}$$</p>` : `$${latex}$`)
-        .run();
+      if (detail.display === "block") insertBlock(latex);
+      else insertInline(latex);
     };
     window.addEventListener("math:insert-latex", onInsert);
     return () => window.removeEventListener("math:insert-latex", onInsert);
   }, [editor]);
 
-  // --- Dialogue MathLive ---
+  // --- Popup MathLive (facultative) ---
   const [openMath, setOpenMath] = useState(false);
-  const [mfVal, setMfVal] = useState("\\frac{}{}"); // valeur par défaut utile
+  const [mfVal, setMfVal] = useState("\\frac{}{}");
   const mathRef = useRef<MathFieldElement | null>(null);
 
   function openMathWithTemplate(template: string) {
@@ -115,21 +124,11 @@ export default function RichAnswerEditor(props: RichAnswerEditorProps) {
     }, 0);
   }
 
-  function insertLatex(latex: string, display: "inline" | "block" = "inline"): void {
-    if (!editor) return;
-    editor
-      .chain()
-      .focus()
-      .insertContent(display === "block" ? `<p>$$${latex}$$</p>` : `$${latex}$`)
-      .run();
-    setOpenMath(false);
-  }
-
   if (!editor) return null;
 
   return (
     <div className="space-y-3">
-      {/* Barre d’outils épurée */}
+      {/* Barre d’outils — maths insérées DIRECTEMENT */}
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
@@ -161,63 +160,25 @@ export default function RichAnswerEditor(props: RichAnswerEditorProps) {
           • Liste
         </button>
 
-        {/* Raccourcis Math */}
         <div className="mx-2 h-6 w-px bg-gray-200" />
-        <button
-          type="button"
-          className="px-2 py-1 border rounded-lg"
-          onClick={() => openMathWithTemplate("\\frac{}{}")}
-          disabled={readOnly}
-          title="Fraction"
-        >
-          a⁄b
-        </button>
-        <button
-          type="button"
-          className="px-2 py-1 border rounded-lg"
-          onClick={() => openMathWithTemplate("x^{ }")}
-          disabled={readOnly}
-          title="Puissance"
-        >
-          x²
-        </button>
-        <button
-          type="button"
-          className="px-2 py-1 border rounded-lg"
-          onClick={() => openMathWithTemplate("\\sqrt{}")}
-          disabled={readOnly}
-          title="Racine carrée"
-        >
-          √
-        </button>
-        <button
-          type="button"
-          className="px-2 py-1 border rounded-lg"
-          onClick={() => openMathWithTemplate("x_{ }")}
-          disabled={readOnly}
-          title="Indice"
-        >
-          aᵢ
-        </button>
-        <button
-          type="button"
-          className="px-2 py-1 border rounded-lg"
-          onClick={() => openMathWithTemplate("\\int")}
-          disabled={readOnly}
-          title="Intégrale"
-        >
-          ∫
-        </button>
-        <button
-          type="button"
-          className="px-2 py-1 border rounded-lg"
-          onClick={() => openMathWithTemplate("\\sum")}
-          disabled={readOnly}
-          title="Somme"
-        >
-          Σ
-        </button>
 
+        {/* Maths inline */}
+        <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Fraction"
+          onClick={() => insertInline("\\frac{}{}")}>a⁄b</button>
+        <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Puissance"
+          onClick={() => insertInline("x^{ }")}>x²</button>
+        <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Racine carrée"
+          onClick={() => insertInline("\\sqrt{}")}>√</button>
+        <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Indice"
+          onClick={() => insertInline("x_{ }")}>aᵢ</button>
+
+        {/* Maths bloc */}
+        <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Intégrale (bloc)"
+          onClick={() => insertBlock("\\int")}>∫</button>
+        <button type="button" className="px-2 py-1 border rounded-lg" disabled={readOnly} title="Somme (bloc)"
+          onClick={() => insertBlock("\\sum")}>Σ</button>
+
+        {/* Saisie guidée (facultative) */}
         <div className="mx-2 h-6 w-px bg-gray-200" />
         <button
           type="button"
@@ -235,13 +196,12 @@ export default function RichAnswerEditor(props: RichAnswerEditorProps) {
         <EditorContent editor={editor} />
       </div>
 
-      {/* Dialogue MathLive */}
+      {/* Popup MathLive (optionnelle) */}
       {openMath && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
           <div className="bg-white p-4 rounded-2xl w-[min(560px,92vw)] space-y-3 shadow-lg">
             <div className="font-semibold">Insérer une formule</div>
 
-            {/* web component natif avec ref typé */}
             <math-field
               ref={mathRef}
               onInput={(e: React.FormEvent<MathFieldElement>) => {
@@ -266,21 +226,18 @@ export default function RichAnswerEditor(props: RichAnswerEditorProps) {
                 Astuce : utilisez les boutons ci-dessus puis “Insérer”.
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  className="px-3 py-1.5 border rounded-lg"
-                  onClick={() => setOpenMath(false)}
-                >
+                <button className="px-3 py-1.5 border rounded-lg" onClick={() => setOpenMath(false)}>
                   Annuler
                 </button>
                 <button
                   className="px-3 py-1.5 border rounded-lg bg-gray-900 text-white hover:opacity-90"
-                  onClick={() => insertLatex(mfVal, "inline")}
+                  onClick={() => { insertInline(mfVal); setOpenMath(false); }}
                 >
                   Insérer (inline)
                 </button>
                 <button
                   className="px-3 py-1.5 border rounded-lg bg-gray-900 text-white hover:opacity-90"
-                  onClick={() => insertLatex(mfVal, "block")}
+                  onClick={() => { insertBlock(mfVal); setOpenMath(false); }}
                 >
                   Insérer (bloc)
                 </button>
@@ -288,8 +245,7 @@ export default function RichAnswerEditor(props: RichAnswerEditorProps) {
             </div>
 
             <p className="text-xs text-gray-500">
-              Vous pouvez aussi saisir directement <code>$…$</code> dans
-              l’éditeur pour insérer des maths inline.
+              Vous pouvez aussi saisir directement <code>$…$</code> (inline) ou <code>$$…$$</code> (bloc).
             </p>
           </div>
         </div>

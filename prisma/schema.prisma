@@ -49,6 +49,11 @@ model Exam {
   endsAt      DateTime
   durationMin Int
   useSEB      Boolean  @default(false)
+  subjectKey       String?   // clé/chemin dans le bucket S3/MinIO
+  subjectFilename  String?
+  subjectMime      String?
+  subjectSize      Int?
+  subjectHtml      String?   // cache HTML (pour .docx)
 
   createdById String
   createdBy   User   @relation("UserExams", fields: [createdById], references: [id])

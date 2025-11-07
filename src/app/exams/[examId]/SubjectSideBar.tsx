@@ -2,14 +2,21 @@
 
 import { useEffect, useState } from "react";
 
-type Props = {
-  examId: string;
-  subjectHtml?: string; // passe le HTML du sujet si tu l'as (sinon texte placeholder)
+type Props = { examId: string };
+
+type SubjectPayload = {
+  ok: boolean;
+  hasSubject?: boolean;
+  mime?: string | null;
+  filename?: string | null;
+  size?: number | null;
+  html?: string | null;
+  url?: string | null;
 };
 
 const LS_KEY = (examId: string) => `exam:${examId}:subjectCollapsed`;
 
-export default function SubjectSidebar({ examId, subjectHtml }: Props) {
+export default function SubjectSidebar({ examId }: Props) {
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     try {
@@ -18,29 +25,67 @@ export default function SubjectSidebar({ examId, subjectHtml }: Props) {
     } catch { return false; }
   });
 
+  const [subject, setSubject] = useState<SubjectPayload | null>(null);
+  const [loading, setLoading] = useState(true);
+
   useEffect(() => {
     try { localStorage.setItem(LS_KEY(examId), collapsed ? "1" : "0"); } catch {}
   }, [collapsed, examId]);
 
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/exams/${examId}/subject`, { cache: "no-store" });
+        const data: SubjectPayload = await res.json();
+        if (alive) setSubject(data);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [examId]);
+
   return (
     <aside
-      className={`relative transition-all duration-300 ease-out ${
-        collapsed ? "w-6" : "w-80"
-      } hidden md:block`}
+      className={`relative transition-all duration-300 ease-out ${collapsed ? "w-6" : "w-80"} hidden md:block`}
       aria-label="Sujet de l'examen"
     >
       {/* Panneau sujet */}
-      <div
-        className={`h-full rounded-2xl border bg-white shadow-sm overflow-hidden ${
-          collapsed ? "opacity-0 pointer-events-none" : "opacity-100"
-        }`}
-      >
+      <div className={`h-full rounded-2xl border bg-white shadow-sm overflow-hidden ${collapsed ? "opacity-0 pointer-events-none" : "opacity-100"}`}>
         <div className="border-b px-3 py-2 text-sm font-medium text-gray-600">Sujet</div>
         <div className="p-3 overflow-auto max-h-[calc(100dvh-220px)] prose prose-sm max-w-none">
-          {subjectHtml ? (
-            <article dangerouslySetInnerHTML={{ __html: subjectHtml }} />
-          ) : (
+          {loading && <p className="text-gray-500">Chargement…</p>}
+          {!loading && (!subject || subject.hasSubject === false) && (
             <p className="text-gray-500">Sujet indisponible.</p>
+          )}
+
+          {!loading && subject?.hasSubject && (
+            <>
+              {/* .docx converti */}
+              {subject.html ? (
+                <article dangerouslySetInnerHTML={{ __html: subject.html }} />
+              ) : subject.mime?.includes("pdf") && subject.url ? (
+                // PDF dans un iframe (URL signée S3)
+                <iframe
+                  title="Sujet PDF"
+                  src={subject.url}
+                  className="w-full h-[70vh] rounded-lg border"
+                />
+              ) : subject.url ? (
+                <a
+                  href={subject.url}
+                  target="_blank"
+                  className="text-sm text-blue-600 underline"
+                  rel="noreferrer"
+                >
+                  Télécharger le sujet ({subject.filename ?? "fichier"})
+                </a>
+              ) : (
+                <p className="text-gray-500">Sujet non prévisualisable.</p>
+              )}
+            </>
           )}
         </div>
       </div>

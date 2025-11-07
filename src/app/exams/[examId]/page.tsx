@@ -1,4 +1,3 @@
-// src/app/exams/[examId]/page.tsx
 import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
@@ -11,7 +10,7 @@ import { AttemptClientProctoring } from "./AttemptClientProctoring";
 type PageProps = { params: Promise<Record<string, string | string[] | undefined>> };
 
 export default async function ExamPage({ params }: PageProps) {
-  const resolvedParams = await params; // ← on attend avant d'y accéder
+  const resolvedParams = await params;
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) redirect("/api/auth/signin");
 
